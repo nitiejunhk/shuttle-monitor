@@ -1,3 +1,4 @@
+import datetime
 import requests
 from bs4 import BeautifulSoup
 
@@ -15,7 +16,7 @@ REQUIRED_SEATS = 2             # 人数
 # ===================================================
 
 def send_feishu_card(title, content_list, btn_url, card_color="orange"):
-    """向飞书群推送高亮警告卡片"""
+    """向飞书群推送格式化卡片"""
     elements = []
     
     for text in content_list:
@@ -58,7 +59,7 @@ def send_feishu_card(title, content_list, btn_url, card_color="orange"):
 
     try:
         response = requests.post(FEISHU_WEBHOOK, json=card_payload, timeout=10)
-        print(f"飞书卡片推送结果: {response.status_code}")
+        print(f"飞书卡片推送结果状态码: {response.status_code}")
     except Exception as e:
         print(f"飞书推送异常: {e}")
 
@@ -73,7 +74,6 @@ def check_seats():
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 查找表格中的行
         rows = soup.find_all('tr')
         regular_seats_found = False
         detail_msg = "常规预订行仍处于售罄/不可选状态"
@@ -107,7 +107,10 @@ if __name__ == "__main__":
     print(f"🔍 正在检查 Parks Canada [{TARGET_DATE} {TIME_WINDOW}] 常规预订车位...")
     has_seats, info = check_seats()
     
-    # 只要检测到常规通道有票，就触发飞书橙色卡片提醒
+    # 获取当前的 UTC 小时
+    utc_now = datetime.datetime.utcnow()
+    
+    # 1. 🚨 情况一：一旦发现常规预订空位，无论何时都触发【橙色抢票卡片】
     if has_seats:
         print(f"🎉【重要提醒】{info}")
         send_feishu_card(
@@ -121,5 +124,18 @@ if __name__ == "__main__":
             BUS_URL,
             card_color="orange"
         )
+    # 2. ☀️ 情况二：没有位置，但在每天 UTC 12:00（即北美东部时间 08:00 AM）发送每日巡检报平安卡片
+    elif utc_now.hour == 12 and utc_now.minute < 20:
+        print(f"☀️ 发送每日巡检日报...")
+        send_feishu_card(
+            "☀️【每日巡检日报】Louis Shuttle 车位监控运行中",
+            [
+                f"**目标日期**：{TARGET_DATE} ({TIME_WINDOW})",
+                f"**巡检状态**：监控正常运行中",
+                f"**最新车位情况**：{info}"
+            ],
+            BUS_URL,
+            card_color="blue"
+        )
     else:
-        print(f"ℹ️ 状态正常: {info}")
+        print(f"ℹ️ 扫描正常: {info}（未触发表格推送）")
