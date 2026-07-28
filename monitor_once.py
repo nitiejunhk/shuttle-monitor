@@ -11,7 +11,8 @@ BUS_URL = "https://example.com/shuttle-booking/2026-08-29"
 
 # 3. 监控目标设置
 TARGET_DATE = "2026-08-29"
-TIME_WINDOW = "8am-9am"        # 目标时段
+# 涵盖 8am 到 11am 之间的所有可能时段关键词
+TIME_SLOTS = ["8am", "9am", "10am", "11am", "8:00", "9:00", "10:00", "11:00"]
 REQUIRED_SEATS = 2             # 人数
 # ===================================================
 
@@ -64,7 +65,7 @@ def send_feishu_card(title, content_list, btn_url, card_color="orange"):
         print(f"飞书推送异常: {e}")
 
 def check_seats():
-    """解析 Parks Canada 表格，过滤 Last Minute，仅检查常规提前预订车位"""
+    """解析 Parks Canada 表格，过滤 Last Minute，仅检查 8:00 - 11:00 的常规提前预订车位"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -75,48 +76,50 @@ def check_seats():
         soup = BeautifulSoup(response.text, 'html.parser')
         
         rows = soup.find_all('tr')
-        regular_seats_found = False
-        detail_msg = "常规预订行仍处于售罄/不可选状态"
+        available_slots = []
+        detail_msg = "8:00 AM - 11:00 AM 之间的常规预订仍处于售罄/不可选状态"
 
         for row in rows:
             text_content = row.get_text(strip=True)
+            text_lower = text_content.lower()
             
-            # 精准匹配目标时段，且过滤掉带有 (Last Minute) 的干扰行
-            if TIME_WINDOW.lower() in text_content.lower() and "last minute" not in text_content.lower():
+            # 过滤掉带有 (Last Minute) 的干扰行
+            if "last minute" in text_lower:
+                continue
+
+            # 判断该行是否匹配 8am - 11am 范围内的任意时段
+            matches_time = any(slot in text_lower for slot in TIME_SLOTS)
+            
+            if matches_time:
                 # 判断该常规行是否有“不可用/售罄”标识
-                is_unavailable = any(kw in text_content.lower() for kw in ["unavailable", "sold out", "x", "满员", "售罄"])
+                is_unavailable = any(kw in text_lower for kw in ["unavailable", "sold out", "x", "满员", "售罄"])
                 
                 if not is_unavailable:
-                    regular_seats_found = True
-                    detail_msg = f"在常规预订通道 ({TIME_WINDOW}) 发现可用车位！"
-                    break
+                    available_slots.append(text_content)
         
-        # 备用容错：如果解析不到 <tr>，做全文本过滤匹配
-        if not rows and "last minute" in response.text.lower():
-            cleaned_html = "\n".join([line for line in response.text.splitlines() if "last minute" not in line.lower()])
-            if TIME_WINDOW.lower() in cleaned_html.lower() and not any(kw in cleaned_html.lower() for kw in ["sold out", "unavailable"]):
-                regular_seats_found = True
-                detail_msg = f"检测到常规 {TIME_WINDOW} 区域状态已更新为可预订！"
+        if available_slots:
+            detail_msg = f"在常规预订通道发现可用车位：{' | '.join(available_slots)}"
+            return True, detail_msg
 
-        return regular_seats_found, detail_msg
+        return False, detail_msg
 
     except Exception as e:
         return False, f"网络请求或解析异常: {e}"
 
 if __name__ == "__main__":
-    print(f"🔍 正在检查 Parks Canada [{TARGET_DATE} {TIME_WINDOW}] 常规预订车位...")
+    print(f"🔍 正在检查 Parks Canada [{TARGET_DATE} 8:00 AM - 11:00 AM] 常规预订车位...")
     has_seats, info = check_seats()
     
     # 获取当前的 UTC 小时
     utc_now = datetime.datetime.utcnow()
     
-    # 1. 🚨 情况一：一旦发现常规预订空位，无论何时都触发【橙色抢票卡片】
+    # 1. 🚨 情况一：一旦发现 8:00 - 11:00 之间有常规预订空位，无论何时都触发【橙色抢票卡片】
     if has_seats:
         print(f"🎉【重要提醒】{info}")
         send_feishu_card(
             "🚨【常规票空位提醒】Louis Shuttle 8/29 有常规预订车位了！",
             [
-                f"**目标日期**：{TARGET_DATE} ({TIME_WINDOW})",
+                f"**目标日期**：{TARGET_DATE} (8:00 AM - 11:00 AM)",
                 f"**需求人数**：{REQUIRED_SEATS} 人",
                 f"**最新状态**：🎉 **{info}**",
                 "这是提前预订的常规座位！请点击下方按钮立即锁定！"
@@ -124,13 +127,13 @@ if __name__ == "__main__":
             BUS_URL,
             card_color="orange"
         )
-    # 2. ☀️ 情况二：没有位置，但在每天 UTC 12:00（即北美东部时间 08:00 AM）发送每日巡检报平安卡片
-    elif utc_now.hour == 12 and utc_now.minute < 20:
+    # 2. ☀️ 情况二：在 UTC 12 点整点内（即 EDT 8:00 AM - 8:59 AM 之间），只要无空位，就触发【每日巡检日报】
+    elif utc_now.hour == 12:
         print(f"☀️ 发送每日巡检日报...")
         send_feishu_card(
             "☀️【每日巡检日报】Louis Shuttle 车位监控运行中",
             [
-                f"**目标日期**：{TARGET_DATE} ({TIME_WINDOW})",
+                f"**目标日期**：{TARGET_DATE} (8:00 AM - 11:00 AM)",
                 f"**巡检状态**：监控正常运行中",
                 f"**最新车位情况**：{info}"
             ],
