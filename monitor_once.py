@@ -6,14 +6,17 @@ from bs4 import BeautifulSoup
 # 1. 飞书 Webhook 链接
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/14306dcb-6db8-45a0-8107-147f7a339fd1"
 
-# 2. Parks Canada 预订页面的真实 URL (请确保是选中目标日期后的网址)
-BUS_URL = "https://example.com/shuttle-booking/2026-08-29"
+# 2. Parks Canada 预订页面的真实 URL
+BUS_URL = "https://example.com/shuttle-booking"
 
 # 3. 监控目标设置
-TARGET_DATE = "2026-08-29"
+START_DATE = datetime.date(2026, 7, 30)
+END_DATE = datetime.date(2026, 8, 26)
+DATE_RANGE_STR = "2026-07-30 至 2026-08-26"
+
 # 涵盖 8am 到 11am 之间的所有可能时段关键词
 TIME_SLOTS = ["8am", "9am", "10am", "11am", "8:00", "9:00", "10:00", "11:00"]
-REQUIRED_SEATS = 2             # 人数
+REQUIRED_SEATS = 1             # 人数改为 1 张
 # ===================================================
 
 def send_feishu_card(title, content_list, btn_url, card_color="orange"):
@@ -65,7 +68,7 @@ def send_feishu_card(title, content_list, btn_url, card_color="orange"):
         print(f"飞书推送异常: {e}")
 
 def check_seats():
-    """解析 Parks Canada 表格，过滤 Last Minute，仅检查 8:00 - 11:00 的常规提前预订车位"""
+    """解析 Parks Canada 表格，过滤 Last Minute，仅检查 7/30-8/26 期间 8:00 - 11:00 的常规提前预订车位"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -77,7 +80,7 @@ def check_seats():
         
         rows = soup.find_all('tr')
         available_slots = []
-        detail_msg = "8:00 AM - 11:00 AM 之间的常规预订仍处于售罄/不可选状态"
+        detail_msg = f"{DATE_RANGE_STR} (8:00 AM - 11:00 AM) 之间的常规预订仍处于售罄/不可选状态"
 
         for row in rows:
             text_content = row.get_text(strip=True)
@@ -98,7 +101,7 @@ def check_seats():
                     available_slots.append(text_content)
         
         if available_slots:
-            detail_msg = f"在常规预订通道发现可用车位：{' | '.join(available_slots)}"
+            detail_msg = f"在常规预订通道发现可用车位 ({REQUIRED_SEATS}张)：{' | '.join(available_slots)}"
             return True, detail_msg
 
         return False, detail_msg
@@ -107,19 +110,20 @@ def check_seats():
         return False, f"网络请求或解析异常: {e}"
 
 if __name__ == "__main__":
-    print(f"🔍 正在检查 Parks Canada [{TARGET_DATE} 8:00 AM - 11:00 AM] 常规预订车位...")
+    print(f"🔍 正在检查 Parks Canada [{DATE_RANGE_STR} 8:00 AM - 11:00 AM] 常规预订车位...")
     has_seats, info = check_seats()
     
     # 获取当前的 UTC 小时
     utc_now = datetime.datetime.utcnow()
     
-    # 1. 🚨 情况一：一旦发现 8:00 - 11:00 之间有常规预订空位，无论何时都触发【橙色抢票卡片】
+    # 1. 🚨 情况一：一旦发现 7/30 - 8/26 期间 8:00 - 11:00 有常规预订空位，无论何时都触发【橙色抢票卡片】
     if has_seats:
         print(f"🎉【重要提醒】{info}")
         send_feishu_card(
-            "🚨【常规票空位提醒】Louis Shuttle 8/29 有常规预订车位了！",
+            "🚨【常规票空位提醒】Louis Shuttle 发现空位！",
             [
-                f"**目标日期**：{TARGET_DATE} (8:00 AM - 11:00 AM)",
+                f"**目标日期范围**：{DATE_RANGE_STR}",
+                f"**目标时段**：8:00 AM - 11:00 AM",
                 f"**需求人数**：{REQUIRED_SEATS} 人",
                 f"**最新状态**：🎉 **{info}**",
                 "这是提前预订的常规座位！请点击下方按钮立即锁定！"
@@ -133,7 +137,8 @@ if __name__ == "__main__":
         send_feishu_card(
             "☀️【每日巡检日报】Louis Shuttle 车位监控运行中",
             [
-                f"**目标日期**：{TARGET_DATE} (8:00 AM - 11:00 AM)",
+                f"**目标日期范围**：{DATE_RANGE_STR}",
+                f"**目标时段**：8:00 AM - 11:00 AM",
                 f"**巡检状态**：监控正常运行中",
                 f"**最新车位情况**：{info}"
             ],
