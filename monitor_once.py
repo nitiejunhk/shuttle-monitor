@@ -7,16 +7,14 @@ import requests
 # -------------------------------------------------------------------
 START_DATE = "2026-07-29"
 END_DATE = "2026-08-07"
-TIME_WINDOW_START = "06:00"  # 监控开始时间
-TIME_WINDOW_END = "11:00"  # 监控结束时间
 
-# 接收提醒的 Webhook / 推送接口 (例如 Server酱 / Telegram / Pushbullet 等)
+# 接收提醒的 Webhook / 推送接口 (系统环境变量)
 PUSH_WEBHOOK_URL = os.environ.get("PUSH_WEBHOOK_URL", "")
 
 
 def send_notification(title, content):
-    """触发推送通知的函数"""
-    print(f"【推送通知】{title}\n{content}")
+    """触发推送通知"""
+    print(f"\n🔔 【推送通知】{title}\n{content}\n")
     if PUSH_WEBHOOK_URL:
         try:
             requests.post(
@@ -27,75 +25,114 @@ def send_notification(title, content):
 
 
 def check_ticket_availability():
-    # 🚨 请注意：如果你们团队有真实的 Parks Canada 接口 URL，请替换掉下面的伪地址
-    api_url = "https://reservation.pc.gc.ca/api/availability"
+    # 真实 API 基础 URL (根据你提取的真实接口调整)
+    base_url = "https://reservation.pc.gc.ca/api/availability/resourcedailyavailability"
 
+    # 请求头（模拟标准浏览器，避开简单的防爬拦截）
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://reservation.pc.gc.ca/",
+    }
+
+    # 提取出的真实查询参数
+    params = {
+        "cartUid": "ed4c6dc6-96b4-49e2-a971-36b8cb9736a4",
+        "resourceId": "-2147476638",
+        "bookingCategoryId": "9",
+        "startDate": START_DATE,
+        "endDate": END_DATE,
+        "isReserving": "true",
+        "equipmentCategoryId": "",
+        "subEquipmentCategoryId": "",
+        "boatLength": "0",
+        "boatDraft": "0",
+        "boatWidth": "0",
+        "peopleCapacityCategoryCounts": '[{"capacityCategoryId":-32767,"subCapacityCategoryId":null,"count":1}]',
+        "numEquipment": "0",
+        "filterData": "[]",
+        "groupHoldUid": "",
+        "bookingUid": "cefea66e-d39a-4295-a9c7-1fec0e09bff1",
     }
 
     print(
-        f"🔍 正在检索 Lake Louise & Moraine Lake [{START_DATE} 至 {END_DATE} {TIME_WINDOW_START} - {TIME_WINDOW_END}] 的常规预订车位..."
+        f"🔍 正在从 Parks Canada 真实接口查询 [{START_DATE} 至 {END_DATE}] 车位信息..."
     )
 
     try:
-        # 1. 发起真实请求 (取消了注释)
-        response = requests.get(api_url, headers=headers, timeout=15)
+        response = requests.get(
+            base_url, headers=headers, params=params, timeout=15
+        )
 
         # ---------------------------------------------------------------
-        # 🚨 DEBUG 打印：查看接口实际返回了什么
+        # 打印 DEBUG 日志以便排查
         # ---------------------------------------------------------------
         print("\n================ DEBUG Raw Data 开始 ================")
+        print(f"HTTP 状态码: {response.status_code}")
+
         try:
             data = response.json()
-            print(json.dumps(data, indent=2, ensure_ascii=False))
+            # 格式化输出前 1000 个字符，防止日志过长
+            json_str = json.dumps(data, indent=2, ensure_ascii=False)
+            print(
+                json_str[:1000] + ("\n... (后续截断)" if len(json_str) > 1000 else "")
+            )
         except Exception:
-            data = {}
-            print("返回内容非标准 JSON：")
-            print(response.text[:2000])
+            data = None
+            print("返回内容非 JSON 格式：")
+            print(response.text[:1000])
         print("================ DEBUG Raw Data 结束 ================\n")
 
         # ---------------------------------------------------------------
-        # 2. 核心解析与判定逻辑
+        # 2. 余票解析逻辑
         # ---------------------------------------------------------------
-        found_available_tickets = []
+        found_tickets = []
 
-        # 遍历 API 返回的 slots 数据 (取消了注释)
-        slots = data.get("slots", []) if isinstance(data, dict) else []
+        if isinstance(data, dict):
+            # Parks Canada 接口返回的结构通常在 resourceDailyAvailabilities 或类似列表中
+            availabilities = (
+                data.get("resourceDailyAvailabilities")
+                or data.get("availabilities")
+                or []
+            )
 
-        for slot in slots:
-            slot_date = str(slot.get("date", ""))
-            slot_time = str(slot.get("time", ""))
-            location = str(slot.get("location", ""))
-            category = str(slot.get("category", "Regular"))
-            status = str(slot.get("status", "")).lower()
+            for item in availabilities:
+                date_str = item.get("date") or item.get("startDate")
+                # 检查状态是否为可预订 (通常值为 0/Available/True)
+                status = item.get("status")
+                is_available = item.get("isAvailable") or status in [
+                    0,
+                    "Available",
+                    "A",
+                ]
 
-            # 关键点 1：只筛选常规票 (排除 Last Minute)
-            if "last minute" in category.lower():
-                continue
+                if is_available:
+                    found_tickets.append(f"📅 日期: {date_str} | 状态: 有票/可预订")
 
-            # 关键点 2：只要单条线路有票、且在设定的日期窗口内，即视为找到可用票
-            is_available = status in ["available", "a", "ok"] or slot.get(
-                "available"
-            ) is True
-            if is_available and (START_DATE <= slot_date <= END_DATE):
-                found_available_tickets.append(
-                    f"📅 {slot_date} | 📍 {location} | ⏰ {slot_time} ({category})"
-                )
+        # 如果返回的是列表格式
+        elif isinstance(data, list):
+            for item in data:
+                date_str = item.get("date")
+                if item.get("isAvailable") or item.get("status") in [
+                    0,
+                    "Available",
+                    "A",
+                ]:
+                    found_tickets.append(f"📅 日期: {date_str} | 状态: 有票/可预订")
 
         # ---------------------------------------------------------------
-        # 3. 结果汇总与提醒
+        # 3. 结果判断与推送
         # ---------------------------------------------------------------
-        if found_available_tickets:
-            msg_body = "\n".join(found_available_tickets)
-            title = "🎉 刷到 Banff 湖区常规班车票啦！"
+        if found_tickets:
+            msg_body = "\n".join(found_tickets)
+            title = "🎉 刷到 Banff 班车票啦！"
             print(
-                f"✅ 扫描到可用车票：\n{msg_body}\n（已成功触发推送）"
+                f"✅ 成功找到可用车票：\n{msg_body}"
             )
             send_notification(title, msg_body)
         else:
             print(
-                f"ℹ️ 扫描正常: {START_DATE} 至 {END_DATE} ({TIME_WINDOW_START} - {TIME_WINDOW_END}) 的 Lake Louise 及 Moraine Lake 线路常规车票仍售罄（未触发推送）"
+                f"ℹ️ 扫描完成：[{START_DATE} 至 {END_DATE}] 指定范围内暂无可用车票。"
             )
 
     except Exception as e:
