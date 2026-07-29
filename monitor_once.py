@@ -3,7 +3,7 @@ import os
 import requests
 
 # -------------------------------------------------------------------
-# 1. 监控配置 (请根据你的实际项目需求调整参数)
+# 1. 监控配置
 # -------------------------------------------------------------------
 START_DATE = "2026-07-29"
 END_DATE = "2026-08-07"
@@ -27,12 +27,11 @@ def send_notification(title, content):
 
 
 def check_ticket_availability():
-    # 模拟请求 Parks Canada 或你当前调用的监控 API 接口
-    # 提示：请确保这里的 API URL / Header 与你现有的爬虫请求一致
-    api_url = "https://reservation.pc.gc.ca/api/availability"  # 替换为你的实际接口地址
+    # 🚨 请注意：如果你们团队有真实的 Parks Canada 接口 URL，请替换掉下面的伪地址
+    api_url = "https://reservation.pc.gc.ca/api/availability"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
     print(
@@ -40,40 +39,49 @@ def check_ticket_availability():
     )
 
     try:
-        # response = requests.get(api_url, headers=headers, timeout=10)
-        # data = response.json()
+        # 1. 发起真实请求 (取消了注释)
+        response = requests.get(api_url, headers=headers, timeout=15)
 
         # ---------------------------------------------------------------
-        # 2. 核心解析与判定逻辑 (独立评估每个线路与班次)
+        # 🚨 DEBUG 打印：查看接口实际返回了什么
+        # ---------------------------------------------------------------
+        print("\n================ DEBUG Raw Data 开始 ================")
+        try:
+            data = response.json()
+            print(json.dumps(data, indent=2, ensure_ascii=False))
+        except Exception:
+            data = {}
+            print("返回内容非标准 JSON：")
+            print(response.text[:2000])
+        print("================ DEBUG Raw Data 结束 ================\n")
+
+        # ---------------------------------------------------------------
+        # 2. 核心解析与判定逻辑
         # ---------------------------------------------------------------
         found_available_tickets = []
 
-        """
-        假设 API 返回的结构/列表数据格式如下：
-        item = {
-            "date": "2026-08-04",
-            "time": "06:30 AM",
-            "location": "Moraine Lake",
-            "category": "Regular", # Regular 或 Last Minute
-            "status": "Available"  # Available 或 Unavailable
-        }
-        """
+        # 遍历 API 返回的 slots 数据 (取消了注释)
+        slots = data.get("slots", []) if isinstance(data, dict) else []
 
-        # 这里替换为你从 API 拿到的真实 slots 列表 (示例解析逻辑如下)：
-        # for slot in data.get("slots", []):
-        #     slot_date = slot.get("date")
-        #     slot_time = slot.get("time")
-        #     location = slot.get("location")
-        #     category = slot.get("category", "")
-        #     status = slot.get("status")
+        for slot in slots:
+            slot_date = str(slot.get("date", ""))
+            slot_time = str(slot.get("time", ""))
+            location = str(slot.get("location", ""))
+            category = str(slot.get("category", "Regular"))
+            status = str(slot.get("status", "")).lower()
 
-        #     # 关键点 1：只筛选常规票 (排除 Last Minute)
-        #     if "Last Minute" in category:
-        #         continue
+            # 关键点 1：只筛选常规票 (排除 Last Minute)
+            if "last minute" in category.lower():
+                continue
 
-        #     # 关键点 2：只要单条线路有票、且在设定的时间窗口内，即视为找到可用票
-        #     if status == "Available" and (START_DATE <= slot_date <= END_DATE):
-        #         found_available_tickets.append(f"📅 {slot_date} | 📍 {location} | ⏰ {slot_time} ({category})")
+            # 关键点 2：只要单条线路有票、且在设定的日期窗口内，即视为找到可用票
+            is_available = status in ["available", "a", "ok"] or slot.get(
+                "available"
+            ) is True
+            if is_available and (START_DATE <= slot_date <= END_DATE):
+                found_available_tickets.append(
+                    f"📅 {slot_date} | 📍 {location} | ⏰ {slot_time} ({category})"
+                )
 
         # ---------------------------------------------------------------
         # 3. 结果汇总与提醒
