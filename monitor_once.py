@@ -19,6 +19,10 @@ TIME_SLOTS = [
     "6am", "7am", "8am", "9am", "10am", "11am",
     "6:00", "7:00", "8:00", "9:00", "10:00", "11:00"
 ]
+
+# 双湖路线关键词（包含 Lake Louise 或 Moraine Lake）
+TARGET_ROUTES = ["lake louise", "moraine lake", "moraine"]
+
 REQUIRED_SEATS = 1             # 1 张票
 # ===================================================
 
@@ -71,7 +75,7 @@ def send_feishu_card(title, content_list, btn_url, card_color="orange"):
         print(f"飞书推送异常: {e}")
 
 def check_seats():
-    """解析 Parks Canada 表格，过滤 Last Minute，仅检查 7/29-8/7 期间 6:00 - 11:00 的常规提前预订车位"""
+    """同时监控 Lake Louise 和 Moraine Lake 预订通道 (7/29-8/7 6:00 - 11:00)"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -83,7 +87,7 @@ def check_seats():
         
         rows = soup.find_all('tr')
         available_slots = []
-        detail_msg = f"{DATE_RANGE_STR} (6:00 AM - 11:00 AM) 之间的常规预订仍处于售罄/不可选状态"
+        detail_msg = f"{DATE_RANGE_STR} (6:00 AM - 11:00 AM) 的 Lake Louise 及 Moraine Lake 路线常规车票仍售罄"
 
         for row in rows:
             text_content = row.get_text(strip=True)
@@ -93,11 +97,14 @@ def check_seats():
             if "last minute" in text_lower:
                 continue
 
-            # 判断该行是否匹配 6am - 11am 范围内的任意时段
+            # 1. 匹配目标时段 6am - 11am
             matches_time = any(slot in text_lower for slot in TIME_SLOTS)
             
-            if matches_time:
-                # 判断该常规行是否有“不可用/售罄”标识
+            # 2. 匹配路线（Lake Louise 或 Moraine Lake 均可）
+            matches_route = any(route in text_lower for route in TARGET_ROUTES) or len(TARGET_ROUTES) == 0
+
+            if matches_time and matches_route:
+                # 判断该行是否有“不可用/售罄”标识
                 is_unavailable = any(kw in text_lower for kw in ["unavailable", "sold out", "x", "满员", "售罄"])
                 
                 if not is_unavailable:
@@ -113,36 +120,38 @@ def check_seats():
         return False, f"网络请求或解析异常: {e}"
 
 if __name__ == "__main__":
-    print(f"🔍 正在检查 Parks Canada [{DATE_RANGE_STR} 6:00 AM - 11:00 AM] 常规预订车位...")
+    print(f"🔍 正在双向监控 Lake Louise & Moraine Lake [{DATE_RANGE_STR} 6:00 AM - 11:00 AM] 常规预订车位...")
     has_seats, info = check_seats()
     
     # 获取当前的 UTC 小时
     utc_now = datetime.datetime.utcnow()
     
-    # 1. 🚨 情况一：一旦发现 7/29 - 8/7 期间 6:00 - 11:00 有常规预订空位，无论何时都触发【橙色抢票卡片】
+    # 1. 🚨 情况一：只要任意一条线路在目标时段刷出票，立即触发【橙色抢票卡片】
     if has_seats:
         print(f"🎉【重要提醒】{info}")
         send_feishu_card(
-            "🚨【常规票空位提醒】Louis Shuttle 发现空位！",
+            "🚨【双湖常规票空位提醒】Shuttle 发现空位！",
             [
                 f"**目标日期范围**：{DATE_RANGE_STR}",
+                f"**目标路线**：Lake Louise & Moraine Lake",
                 f"**目标时段**：6:00 AM - 11:00 AM",
                 f"**需求人数**：{REQUIRED_SEATS} 人",
                 f"**最新状态**：🎉 **{info}**",
-                "这是提前预订的常规座位！请点击下方按钮立即锁定！"
+                "提示：凭任意一湖的 Shuttle 车票，均可免费搭乘 Connector 巴士游览另一个湖！"
             ],
             BUS_URL,
             card_color="orange"
         )
-    # 2. ☀️ 情况二：在 UTC 12 点整点内（即 EDT 8:00 AM - 8:59 AM 之间），只要无空位，就触发【每日巡检日报】
+    # 2. ☀️ 情况二：在 UTC 12 点整点内（EDT 8:00 AM），触发【每日巡检日报】
     elif utc_now.hour == 12:
         print(f"☀️ 发送每日巡检日报...")
         send_feishu_card(
-            "☀️【每日巡检日报】Louis Shuttle 车位监控运行中",
+            "☀️【每日巡检日报】双湖 Shuttle 车位监控运行中",
             [
                 f"**目标日期范围**：{DATE_RANGE_STR}",
+                f"**监控路线**：Lake Louise & Moraine Lake",
                 f"**目标时段**：6:00 AM - 11:00 AM",
-                f"**巡检状态**：监控正常运行中",
+                f"**巡检状态**：双线路监控正常运行中",
                 f"**最新车位情况**：{info}"
             ],
             BUS_URL,
