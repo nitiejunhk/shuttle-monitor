@@ -2,29 +2,28 @@ name: Shuttle Seats Monitor
 
 on:
   schedule:
-    # 每 15 分钟自动运行一次 (Cron 语法)
     - cron: '*/15 * * * *'
-  workflow_dispatch: # 允许在 GitHub 网页上随时手动点击触发执行
+  workflow_dispatch:
 
 jobs:
   check-seats:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. 拉取仓库代码
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: 2. 安装 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 3. 安装依赖库
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-     - name: 4. 执行车位监控脚本
-      env:
-        FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-      run: |
-        python monitor_once.py
+      - name: Run seat monitor script
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python monitor_once.py
