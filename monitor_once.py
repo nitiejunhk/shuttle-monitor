@@ -65,7 +65,7 @@ def send_feishu_message(title: str, content: str):
 def is_time_valid_and_in_range(date_str: str, slot_time_str: str) -> bool:
     """
     智能解析时间：
-    1. 过滤已过期的今天班次（例如今天10点跑脚本，自动跳过6:30的票）
+    1. 过滤已过期的班次（例如今天10点跑脚本，自动跳过当天6:30的票）
     2. 检查是否在 06:00 - 11:00 范围内
     """
     if not slot_time_str or slot_time_str.strip() == "":
