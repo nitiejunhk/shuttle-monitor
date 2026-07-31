@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from datetime import datetime, time
+from datetime import datetime
 import requests
 
 # ---------------------------------------------------------------------------
@@ -9,7 +9,7 @@ import requests
 # ---------------------------------------------------------------------------
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
-# 监控目标日期范围：直接从 8 月 1 日开始，彻底摒弃今天已过期的 7 月 31 日数据
+# 监控目标日期范围（只监控 2026-08-01 到 2026-08-26）
 TARGET_START_DATE = "2026-08-01"
 TARGET_END_DATE = "2026-08-26"
 
@@ -59,7 +59,7 @@ def send_feishu_message(title: str, content: str):
 
 
 def fetch_availability() -> list:
-    """拉取 Banff Shuttle 预订系统数据并精准解析"""
+    """拉取 Banff Shuttle 预订系统数据并精准过滤日期"""
     available_slots = []
     
     params = {
@@ -88,19 +88,27 @@ def fetch_availability() -> list:
                 if not isinstance(slot, dict):
                     continue
                 
+                # 1. 严格检查 API 返回的日期字段
+                raw_date = slot.get("date")
+                
+                # 如果 API 没给日期，或者日期不在 2026-08-01 ~ 2026-08-26 范围内，直接跳过！
+                if not raw_date or str(raw_date) < TARGET_START_DATE or str(raw_date) > TARGET_END_DATE:
+                    continue
+
+                # 2. 检查是否有票
                 avail_status = slot.get("availability")
                 quota = slot.get("remainingQuota")
-                date_str = slot.get("date") or TARGET_START_DATE
-                slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
                 
-                # Parks Canada 规则：availability != 5 即为有票
+                # availability != 5 代表有余票
                 is_available = (avail_status != 5 or (quota is not None and quota > 0))
                 
                 if is_available:
+                    slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
                     res_name = slot.get("resourceName") or f"资源ID {res_id}"
-                    logging.info(f"🎯 识别到未来有效余票！日期: {date_str}, 时间: {slot_time}")
+                    
+                    logging.info(f"🎯 识别到真实有效余票！日期: {raw_date}, 时间: {slot_time}")
                     available_slots.append({
-                        "date": str(date_str),
+                        "date": str(raw_date),
                         "time": str(slot_time) if slot_time else "早间/全天时段",
                         "info": f"Banff Shuttle ({res_name})"
                     })
