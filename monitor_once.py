@@ -63,10 +63,10 @@ def send_feishu_message(title: str, content: str):
 
 
 def is_time_in_range(slot_time_str: str) -> bool:
-    """检查时间字符串是否在 06:00 - 11:00 范围内，若解析失败则默认不过滤"""
+    """检查时间字符串是否在 06:00 - 11:00 范围内，若解析失败则默认不拦截"""
     if not slot_time_str:
         return True
-    formats = ["%H:%M", "%I:%M %p", "%H:%M:%S", "%g:%i%a"]
+    formats = ["%H:%M", "%I:%M %p", "%H:%M:%S"]
     for fmt in formats:
         try:
             t = datetime.strptime(slot_time_str.strip(), fmt).time()
@@ -77,7 +77,7 @@ def is_time_in_range(slot_time_str: str) -> bool:
 
 
 def fetch_availability() -> list:
-    """拉取 Banff Shuttle 预订系统数据"""
+    """拉取 Banff Shuttle 预订系统数据并精准解析"""
     available_slots = []
     
     params = {
@@ -97,55 +97,38 @@ def fetch_availability() -> list:
 
         data = response.json()
         
-        # 打印调试日志
-        if isinstance(data, dict):
-            logging.info(f"🔍 API 返回数据 Key: {list(data.keys())}")
-            logging.info(f"🔍 API 样例数据: {str(data)[:300]}")
+        # 获取核心字段 resourceAvailabilities
+        res_avail = data.get("resourceAvailabilities", {})
         
-        # 兼容多种数据层级结构
-        resources = []
-        if isinstance(data, dict):
-            resources = data.get("resourceAvailabilities") or data.get("gridData") or data.get("availabilities") or [data]
-        elif isinstance(data, list):
-            resources = data
-
-        # 解析数据
-        if isinstance(resources, dict):
-            resources = list(resources.values())
-
-        for res in resources:
-            if isinstance(res, list):
-                day_list = res
-            elif isinstance(res, dict):
-                day_list = res.get("days") or res.get("availabilities") or [res]
-            else:
+        for res_id, slots in res_avail.items():
+            if not isinstance(slots, list):
                 continue
-
-            for day in day_list:
-                if not isinstance(day, dict):
-                    continue
-                date_str = day.get("date") or day.get("d") or TARGET_START_DATE
                 
-                # 时间切片/班次列表
-                slices = day.get("slices") or day.get("availabilities") or day.get("slots") or [day]
-                for s in slices:
-                    if not isinstance(s, dict):
-                        continue
-                    
-                    status = s.get("status") or s.get("available") or s.get("a")
-                    slot_time = s.get("startTime") or s.get("time") or s.get("t") or ""
-                    
-                    # 状态判断 (1 代表有票，True 代表有票)
-                    is_available = (status == 1 or status is True or str(status).lower() in ["available", "1", "true"])
-                    
-                    if is_available and is_time_in_range(str(slot_time)):
-                        info_name = s.get("name") or s.get("resourceName") or "Banff Shuttle 班车"
-                        logging.info(f"🎯 成功识别到余票！日期: {date_str}, 时间: {slot_time}, 名称: {info_name}")
-                        available_slots.append({
-                            "date": str(date_str),
-                            "time": str(slot_time) if slot_time else "全天/具体班次",
-                            "info": str(info_name)
-                        })
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+                
+                avail_status = slot.get("availability")
+                quota = slot.get("remainingQuota")
+                date_str = slot.get("date") or TARGET_START_DATE
+                slot_time = slot.get("startTime") or slot.get("time") or ""
+                
+                # Parks Canada 规则：
+                # availability == 0 代表完全有票
+                # availability == 1 或 quota > 0 代表有剩余名额
+                # availability == 5 代表已约满 (Unavailable)
+                is_available = False
+                if avail_status in [0, 1, 0.0] or (quota is not None and quota > 0):
+                    is_available = True
+                
+                if is_available and is_time_in_range(str(slot_time)):
+                    res_name = slot.get("resourceName") or f"资源ID {res_id}"
+                    logging.info(f"🎯 成功识别到余票！日期: {date_str}, 时间: {slot_time}, 状态码: {avail_status}, 名额: {quota}")
+                    available_slots.append({
+                        "date": str(date_str),
+                        "time": str(slot_time) if slot_time else "早间时段",
+                        "info": f"Banff Shuttle ({res_name})"
+                    })
 
     except Exception as e:
         logging.error(f"❌ 查询 API 出现异常: {e}")
