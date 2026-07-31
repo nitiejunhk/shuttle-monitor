@@ -1,6 +1,5 @@
 import os
 import sys
-import re
 import logging
 from datetime import datetime, time
 import requests
@@ -63,41 +62,44 @@ def send_feishu_message(title: str, content: str):
         logging.error(f"❌ 飞书推送失败: {e}")
 
 
-def is_time_in_range(slot_time_str: str) -> bool:
+def is_time_valid_and_in_range(date_str: str, slot_time_str: str) -> bool:
     """
-    智能解析时间格式：
-    能兼容处理 '6:30am-7am', '6:30am', '06:30:00', '6:30' 等各种时间格式
+    智能解析时间：
+    1. 过滤已过期的今天班次（例如今天10点跑脚本，自动跳过6:30的票）
+    2. 检查是否在 06:00 - 11:00 范围内
     """
     if not slot_time_str or slot_time_str.strip() == "":
-        return True # 如果没有返回时间字段，默认不拦截
+        return True
         
     raw_str = slot_time_str.lower().strip()
-    
-    # 如果是区间格式 (如 6:30am-7am)，只截取前半部分 (6:30am)
     if "-" in raw_str:
         raw_str = raw_str.split("-")[0].strip()
         
-    # 尝试多种常见时间格式解析
-    formats = [
-        "%I:%M%p",    # 6:30am
-        "%I%p",       # 6am
-        "%I:%M %p",   # 6:30 am
-        "%H:%M",      # 06:30
-        "%H:%M:%S"    # 06:30:00
-    ]
+    formats = ["%I:%M%p", "%I%p", "%I:%M %p", "%H:%M", "%H:%M:%S"]
+    parsed_time = None
     
     for fmt in formats:
         try:
-            t = datetime.strptime(raw_str, fmt).time()
-            return TIME_START <= t <= TIME_END
+            parsed_time = datetime.strptime(raw_str, fmt).time()
+            break
         except ValueError:
             continue
-            
-    # 如果包含 6:30, 7:00 等常见字眼直接放行，防止漏拦截
-    if any(k in raw_str for k in ["6:30", "7:00", "8:00", "9:00", "10:00", "6am", "7am", "8am", "9am", "10am"]):
-        return True
 
-    return True # 遇到无法解析的格式默认放行，宁可多报不可漏报
+    # 如果解析出了具体时间
+    if parsed_time:
+        # 1. 检查时段过滤 (06:00 - 11:00)
+        if not (TIME_START <= parsed_time <= TIME_END):
+            return False
+            
+        # 2. 检查过期过滤（如果是今天，且班车时间早于现在，过滤掉）
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if date_str == today_str:
+            now_time = datetime.now().time()
+            if parsed_time < now_time:
+                logging.info(f"⏳ 跳过当天已过期的班次: {slot_time_str} (当前时间: {now_time.strftime('%H:%M')})")
+                return False
+
+    return True
 
 
 def fetch_availability() -> list:
@@ -133,22 +135,17 @@ def fetch_availability() -> list:
                 avail_status = slot.get("availability")
                 quota = slot.get("remainingQuota")
                 date_str = slot.get("date") or TARGET_START_DATE
-                
-                # 尝试提取各种可能是时间的字段
                 slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
                 
-                # 判断是否有票：
-                # 状态码不是 5 (5是约满)，或者剩余名额 quota > 0，即代表有票！
-                is_available = False
-                if avail_status != 5 or (quota is not None and quota > 0):
-                    is_available = True
+                # 状态不是 5 (售罄) 即代表有余票
+                is_available = (avail_status != 5 or (quota is not None and quota > 0))
                 
-                if is_available and is_time_in_range(str(slot_time)):
+                if is_available and is_time_valid_and_in_range(str(date_str), str(slot_time)):
                     res_name = slot.get("resourceName") or f"资源ID {res_id}"
-                    logging.info(f"🎯 成功识别到目标车票！日期: {date_str}, 时间/名称: {slot_time}, 状态码: {avail_status}")
+                    logging.info(f"🎯 识别到未来有效余票！日期: {date_str}, 时间: {slot_time}")
                     available_slots.append({
                         "date": str(date_str),
-                        "time": str(slot_time) if slot_time else "6:30am-7am 时段",
+                        "time": str(slot_time) if slot_time else "早间时段",
                         "info": f"Banff Shuttle ({res_name})"
                     })
 
