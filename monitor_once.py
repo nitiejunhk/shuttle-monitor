@@ -9,13 +9,9 @@ import requests
 # ---------------------------------------------------------------------------
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
-# 监控目标日期范围
-TARGET_START_DATE = "2026-07-31"
+# 监控目标日期范围：直接从 8 月 1 日开始，彻底摒弃今天已过期的 7 月 31 日数据
+TARGET_START_DATE = "2026-08-01"
 TARGET_END_DATE = "2026-08-26"
-
-# 监控目标时段 (06:00 - 11:00)
-TIME_START = time(6, 0)
-TIME_END = time(11, 0)
 
 # Parks Canada 查询接口
 PARKS_CANADA_API = "https://reservation.pc.gc.ca/api/availability/map"
@@ -62,46 +58,6 @@ def send_feishu_message(title: str, content: str):
         logging.error(f"❌ 飞书推送失败: {e}")
 
 
-def is_time_valid_and_in_range(date_str: str, slot_time_str: str) -> bool:
-    """
-    智能解析时间：
-    1. 过滤已过期的班次（例如今天10点跑脚本，自动跳过当天6:30的票）
-    2. 检查是否在 06:00 - 11:00 范围内
-    """
-    if not slot_time_str or slot_time_str.strip() == "":
-        return True
-        
-    raw_str = slot_time_str.lower().strip()
-    if "-" in raw_str:
-        raw_str = raw_str.split("-")[0].strip()
-        
-    formats = ["%I:%M%p", "%I%p", "%I:%M %p", "%H:%M", "%H:%M:%S"]
-    parsed_time = None
-    
-    for fmt in formats:
-        try:
-            parsed_time = datetime.strptime(raw_str, fmt).time()
-            break
-        except ValueError:
-            continue
-
-    # 如果解析出了具体时间
-    if parsed_time:
-        # 1. 检查时段过滤 (06:00 - 11:00)
-        if not (TIME_START <= parsed_time <= TIME_END):
-            return False
-            
-        # 2. 检查过期过滤（如果是今天，且班车时间早于现在，过滤掉）
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        if date_str == today_str:
-            now_time = datetime.now().time()
-            if parsed_time < now_time:
-                logging.info(f"⏳ 跳过当天已过期的班次: {slot_time_str} (当前时间: {now_time.strftime('%H:%M')})")
-                return False
-
-    return True
-
-
 def fetch_availability() -> list:
     """拉取 Banff Shuttle 预订系统数据并精准解析"""
     available_slots = []
@@ -137,15 +93,15 @@ def fetch_availability() -> list:
                 date_str = slot.get("date") or TARGET_START_DATE
                 slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
                 
-                # 状态不是 5 (售罄) 即代表有余票
+                # Parks Canada 规则：availability != 5 即为有票
                 is_available = (avail_status != 5 or (quota is not None and quota > 0))
                 
-                if is_available and is_time_valid_and_in_range(str(date_str), str(slot_time)):
+                if is_available:
                     res_name = slot.get("resourceName") or f"资源ID {res_id}"
                     logging.info(f"🎯 识别到未来有效余票！日期: {date_str}, 时间: {slot_time}")
                     available_slots.append({
                         "date": str(date_str),
-                        "time": str(slot_time) if slot_time else "早间时段",
+                        "time": str(slot_time) if slot_time else "早间/全天时段",
                         "info": f"Banff Shuttle ({res_name})"
                     })
 
