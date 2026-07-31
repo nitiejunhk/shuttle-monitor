@@ -82,7 +82,7 @@ def fetch_availability() -> list:
     params = {
         "mapId": -2147483348,
         "bookingCategoryId": 1,
-        "startDate": TARGET_START_DATE,
+        "startDate": "2026-07-31",
         "endDate": TARGET_END_DATE,
         "isDayUse": "true"
     }
