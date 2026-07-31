@@ -10,7 +10,7 @@ import requests
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
 # 监控目标日期范围 (2026年 8月1日 - 8月26日)
-TARGET_START_DATE = "2026-08-01"
+TARGET_START_DATE = datetime.now().strftime("%Y-%m-%d")
 TARGET_END_DATE = "2026-08-26"
 
 # 监控目标时段 (06:00 - 11:00)
