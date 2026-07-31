@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import logging
 from datetime import datetime, time
 import requests
@@ -63,17 +64,40 @@ def send_feishu_message(title: str, content: str):
 
 
 def is_time_in_range(slot_time_str: str) -> bool:
-    """检查时间字符串是否在 06:00 - 11:00 范围内，若解析失败则默认不拦截"""
-    if not slot_time_str:
-        return True
-    formats = ["%H:%M", "%I:%M %p", "%H:%M:%S"]
+    """
+    智能解析时间格式：
+    能兼容处理 '6:30am-7am', '6:30am', '06:30:00', '6:30' 等各种时间格式
+    """
+    if not slot_time_str or slot_time_str.strip() == "":
+        return True # 如果没有返回时间字段，默认不拦截
+        
+    raw_str = slot_time_str.lower().strip()
+    
+    # 如果是区间格式 (如 6:30am-7am)，只截取前半部分 (6:30am)
+    if "-" in raw_str:
+        raw_str = raw_str.split("-")[0].strip()
+        
+    # 尝试多种常见时间格式解析
+    formats = [
+        "%I:%M%p",    # 6:30am
+        "%I%p",       # 6am
+        "%I:%M %p",   # 6:30 am
+        "%H:%M",      # 06:30
+        "%H:%M:%S"    # 06:30:00
+    ]
+    
     for fmt in formats:
         try:
-            t = datetime.strptime(slot_time_str.strip(), fmt).time()
+            t = datetime.strptime(raw_str, fmt).time()
             return TIME_START <= t <= TIME_END
         except ValueError:
             continue
-    return True
+            
+    # 如果包含 6:30, 7:00 等常见字眼直接放行，防止漏拦截
+    if any(k in raw_str for k in ["6:30", "7:00", "8:00", "9:00", "10:00", "6am", "7am", "8am", "9am", "10am"]):
+        return True
+
+    return True # 遇到无法解析的格式默认放行，宁可多报不可漏报
 
 
 def fetch_availability() -> list:
@@ -96,10 +120,8 @@ def fetch_availability() -> list:
             return available_slots
 
         data = response.json()
-        
-        # 获取核心字段 resourceAvailabilities
         res_avail = data.get("resourceAvailabilities", {})
-        
+
         for res_id, slots in res_avail.items():
             if not isinstance(slots, list):
                 continue
@@ -111,22 +133,22 @@ def fetch_availability() -> list:
                 avail_status = slot.get("availability")
                 quota = slot.get("remainingQuota")
                 date_str = slot.get("date") or TARGET_START_DATE
-                slot_time = slot.get("startTime") or slot.get("time") or ""
                 
-                # Parks Canada 规则：
-                # availability == 0 代表完全有票
-                # availability == 1 或 quota > 0 代表有剩余名额
-                # availability == 5 代表已约满 (Unavailable)
+                # 尝试提取各种可能是时间的字段
+                slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
+                
+                # 判断是否有票：
+                # 状态码不是 5 (5是约满)，或者剩余名额 quota > 0，即代表有票！
                 is_available = False
-                if avail_status in [0, 1, 0.0] or (quota is not None and quota > 0):
+                if avail_status != 5 or (quota is not None and quota > 0):
                     is_available = True
                 
                 if is_available and is_time_in_range(str(slot_time)):
                     res_name = slot.get("resourceName") or f"资源ID {res_id}"
-                    logging.info(f"🎯 成功识别到余票！日期: {date_str}, 时间: {slot_time}, 状态码: {avail_status}, 名额: {quota}")
+                    logging.info(f"🎯 成功识别到目标车票！日期: {date_str}, 时间/名称: {slot_time}, 状态码: {avail_status}")
                     available_slots.append({
                         "date": str(date_str),
-                        "time": str(slot_time) if slot_time else "早间时段",
+                        "time": str(slot_time) if slot_time else "6:30am-7am 时段",
                         "info": f"Banff Shuttle ({res_name})"
                     })
 
@@ -162,7 +184,7 @@ def main():
         send_feishu_message(title, content)
 
     else:
-        logging.info("ℹ️ 暂未发现目标时段余票，按规则静默，不发通知。")
+        logging.info("ℹ️ 暂未发现目标余票，按规则静默，不发通知。")
 
     logging.info("=== 任务正常结束 ===")
 
