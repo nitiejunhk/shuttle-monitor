@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 
 # ---------------------------------------------------------------------------
@@ -9,9 +10,12 @@ import requests
 # ---------------------------------------------------------------------------
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL")
 
-# 监控目标日期范围（只监控 2026-08-01 到 2026-08-26）
+# 监控目标日期范围：2026-08-01 至 2026-08-26
 TARGET_START_DATE = "2026-08-01"
 TARGET_END_DATE = "2026-08-26"
+
+# 当地时区设置 (加拿大东部时间 / Montreal / Toronto)
+LOCAL_TIMEZONE = ZoneInfo("America/Toronto")
 
 # Parks Canada 查询接口
 PARKS_CANADA_API = "https://reservation.pc.gc.ca/api/availability/map"
@@ -88,25 +92,21 @@ def fetch_availability() -> list:
                 if not isinstance(slot, dict):
                     continue
                 
-                # 1. 严格检查 API 返回的日期字段
+                # 1. 严格校验返回的日期：没有日期或小于监控起始日期的直接作废
                 raw_date = slot.get("date")
-                
-                # 如果 API 没给日期，或者日期不在 2026-08-01 ~ 2026-08-26 范围内，直接跳过！
                 if not raw_date or str(raw_date) < TARGET_START_DATE or str(raw_date) > TARGET_END_DATE:
                     continue
 
-                # 2. 检查是否有票
+                # 2. 检查是否有余票 (availability != 5)
                 avail_status = slot.get("availability")
                 quota = slot.get("remainingQuota")
-                
-                # availability != 5 代表有余票
                 is_available = (avail_status != 5 or (quota is not None and quota > 0))
                 
                 if is_available:
                     slot_time = slot.get("startTime") or slot.get("time") or slot.get("name") or slot.get("resourceName") or ""
                     res_name = slot.get("resourceName") or f"资源ID {res_id}"
                     
-                    logging.info(f"🎯 识别到真实有效余票！日期: {raw_date}, 时间: {slot_time}")
+                    logging.info(f"🎯 识别到有效余票！日期: {raw_date}, 时间: {slot_time}")
                     available_slots.append({
                         "date": str(raw_date),
                         "time": str(slot_time) if slot_time else "早间/全天时段",
@@ -123,9 +123,12 @@ def fetch_availability() -> list:
 # 主程序
 # ---------------------------------------------------------------------------
 def main():
-    now = datetime.now()
-    current_time_str = now.strftime("%H:%M")
-    logging.info(f"=== 开启 Banff Shuttle 监控逻辑 (当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+    # 使用当地时区精准计算当前时间
+    now = datetime.now(LOCAL_TIMEZONE)
+    current_hour = now.hour
+    current_minute = now.minute
+
+    logging.info(f"=== 开启 Banff Shuttle 监控逻辑 (当前本地时间: {now.strftime('%Y-%m-%d %H:%M:%S')}) ===")
 
     found_slots = fetch_availability()
 
@@ -137,9 +140,10 @@ def main():
         logging.info("📢 发现目标余票，准备发送飞书通知...")
         send_feishu_message(title, content)
 
-    elif current_time_str == "08:00":
+    # 容错判断：在本地时间 08:00 - 08:15 之间触发 08:00 的心跳状态汇报
+    elif current_hour == 8 and current_minute < 15:
         title = "☀️ [Banff Shuttle] 每日运行状态汇报"
-        content = f"汇报时间: {now.strftime('%Y-%m-%d 08:00')}\n\n监控系统正常工作。\n目前暂无目标班车余票。"
+        content = f"汇报时间: {now.strftime('%Y-%m-%d %H:%M')}\n\n监控系统正常工作。\n目前暂无目标班车余票。"
         
         logging.info("⏰ 触发 08:00 心跳推送...")
         send_feishu_message(title, content)
